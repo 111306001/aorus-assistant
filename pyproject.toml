@@ -1,0 +1,15 @@
+[project]
+name = "aorus-assistant"
+version = "0.1.0"
+description = "AORUS MASTER 16 AM6H AI Assistant (Lightweight RAG System)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "llama-cpp-python",
+    "numpy",
+    "sentence-transformers"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
