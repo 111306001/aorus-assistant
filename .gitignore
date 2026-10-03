@@ -1,0 +1,7 @@
+# 忽略模型檔
+models/
+*.gguf
+
+# 忽略 Python 快取檔
+__pycache__/
+*.pyc
