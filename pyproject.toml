@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "aorus-assistant"
 version = "0.1.0"
-description = "Aorus Assistant 專案"
+description = "GIGABYTE AORUS MASTER 16 AM6H - 輕量化 AI 筆電規格問答助手"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -14,13 +14,23 @@ authors = [
 ]
 
 dependencies = [
-    # "requests>=2.31.0",
-    "llama-cpp-python>=0.3.36",
-    "sentence-transformers>=6.1.0",
+    # LLM 推論引擎 (符合硬性限制)
+    "llama-cpp-python>=0.3.1",
+    
+    # 向量化與數學運算 (用於 Embedding 與手刻 Cosine Similarity)
+    "sentence-transformers>=3.0.0", 
+    "numpy>=1.24.0",
+    
+    # 網頁資料爬取與解析 (用於處理規格表)
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
 ]
 
+# 若未來要封裝成 CLI 指令可解除註解
 # [project.scripts]
-# aorus-cli = "aorus_assistant.main:main"
+# aorus-cli = "evaluate:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/aorus_assistant"]
+# 對應 README 中的結構，若你的 py 檔直接放在 src/ 底下，可以改成這樣：
+packages = ["src"] 
+# 或是如果你後續建立 src/aorus_assistant/ 資料夾，就維持原樣。
