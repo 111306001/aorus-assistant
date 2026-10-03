@@ -1,7 +1,33 @@
-# 忽略模型檔
+#忽略模型檔
+
 models/
 *.gguf
 
-# 忽略 Python 快取檔
-__pycache__/
+#忽略 Python 快取檔
+
+pycache/
 *.pyc
+*.pyo
+*.pyd
+
+#虛擬環境 (Virtual Environments) - 解決檔案過大問題的關鍵
+
+.venv/
+venv/
+env/
+ENV/
+
+Jupyter Notebook checkpoints
+
+.ipynb_checkpoints/
+
+#環境變數與機密資訊 (請勿將 API Keys 等上傳)
+
+.env
+
+#IDE 與作業系統暫存檔
+
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

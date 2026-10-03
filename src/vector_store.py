@@ -630,8 +630,8 @@ class SimpleVectorStore:
             # -------------------------------------------------
 
             final_score = (
-                0.65 * semantic_score
-                + 0.20 * keyword_score
+                0.55 * semantic_score
+                + 0.30 * keyword_score
                 + 0.15 * domain_score
             )
 

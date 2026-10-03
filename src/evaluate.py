@@ -2,281 +2,291 @@ import time
 import os
 
 from llama_cpp import Llama
+
 from data_parser import AorusDataParser
 from vector_store import SimpleVectorStore
 
 
 def evaluate_query(llm, vector_store, query, top_k=5):
     """
-    執行單一問題的 RAG 測試。
-
-    評估項目：
-    - Retrieval：檢索到的規格片段
-    - Generation：LLM 最終回答
-    - TTFT：Time To First Token
-    - Stream Chunks/sec：Streaming chunk 產生速度
-
-    注意：
-    llama.cpp streaming chunk 不一定等於一個 token，
-    因此不能直接將 chunk/sec 稱為 Token Per Second。
+    執行單一 RAG Query，並評估：
+    1. Retrieval
+    2. TTFT (Time To First Generated Content)
+    3. Generated Tokens
+    4. Generation Time
+    5. TPS (Tokens Per Second)
+    6. Stream Chunks/sec
     """
 
-    print("\n" + "=" * 60)
-    print(f"[使用者問題]\n{query}")
+    print("\n" + "=" * 70)
+    print(f"Query: {query}")
+    print("=" * 70)
 
-    # =========================================================
+    # ============================================================
     # 1. Retrieval
-    # =========================================================
+    # ============================================================
 
-    retrieved_docs = vector_store.search(
-        query,
-        top_k=top_k
-    )
+    retrieved_docs = vector_store.search(query, top_k=top_k)
 
-    # 為每個 chunk 加上編號，幫助 LLM 維持資訊關係
     context_parts = []
 
     for i, doc in enumerate(retrieved_docs, start=1):
         context_parts.append(
             f"[規格片段 {i}]\n{doc}"
-        )
+    )
 
     context = "\n\n".join(context_parts)
 
-    print("\n[檢索到的規格片段]")
-    print("-" * 40)
-    print(context)
+    print("\n[Retrieved Context]")
 
-    # =========================================================
-    # 2. RAG Prompt
-    # =========================================================
+    for i, doc in enumerate(retrieved_docs, start=1):
+        print(f"\n--- Chunk {i} ---")
+        print(doc)
 
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是一個嚴格的產品規格問答助手。\n"
-                "只能根據【參考規格】回答，不可以使用參考規格以外的知識。\n"
-                "\n"
+    # ============================================================
+    # 2. System Prompt
+    # ============================================================
 
-                "【核心規則】\n"
-                "1. 只能使用參考規格中明確提供的資訊。\n"
-                "2. 不可以猜測、補充、推導或自行計算。\n"
-                "3. 如果參考規格沒有答案，只回答：「參考規格中沒有相關資訊。」\n"
-                "4. 回答時必須保留參考規格原本的「規格名稱 → 規格值」對應關係。\n"
-                "5. 絕對不可交換、顛倒、重新配對或自行重組不同規格的資訊。\n"
-                "\n"
+        system_prompt = """
+你是 AORUS 筆電規格查詢助手。
 
-                "【型號對應】\n"
-                "6. 如果問題涉及多個不同型號，必須逐一建立「型號 → 規格」對應。\n"
-                "7. 每個型號只能使用參考規格中明確屬於該型號的資訊。\n"
-                "8. 絕對不可將某一型號的規格套用到其他型號。\n"
-                "\n"
+你只能根據提供的「規格片段」回答，不得使用外部知識、猜測、推導或補充資料。
 
-                "【分類對應】\n"
-                "9. 如果問題涉及不同分類，例如無線網路與有線網路，"
-                "必須按照參考規格中明確標示的分類回答。\n"
-                "10. 無線網路只能使用明確屬於無線網路的規格，例如 Wi-Fi、802.11、Bluetooth。\n"
-                "11. 有線網路只能使用明確屬於有線網路的規格，例如 LAN、Ethernet。\n"
-                "12. 不可以將一個分類的規格值套用到另一個分類。\n"
-                "\n"
+請嚴格遵守：
 
-                "【位置與數量】\n"
-                "13. 如果問題涉及左側、右側、位置或介面，必須完全按照參考規格中的位置回答，不可顛倒。\n"
-                "14. 數量必須直接依照參考規格回答，不可以自行相加、平均、推算或重複計算。\n"
-                "15. 如果參考規格同時提供總數與分類數量，必須分開理解，不可混用。\n"
-                "\n"
+1. 完整回答使用者問題中的所有要求。
+   如果問題要求「數量 + 規格」，兩者都必須回答。
 
-                "【數值與單位】\n"
-                "16. 數值與單位必須忠實保留，例如 GB、TB、W、Wh、MHz、Hz、GHz。\n"
-                "17. 不可以修改、轉換或推導參考規格中的數值。\n"
-                "\n"
+2. 嚴格維持「實體 → 規格」的對應關係。
+   不可以交換不同型號、版本、介面、位置或規格的資訊。
 
-                "【回答方式】\n"
-                "18. 如果參考規格已經明確提供答案，直接整理原始規格即可。\n"
-                "19. 多個型號時，使用「型號：規格」逐項回答。\n"
-                "20. 多個分類時，使用「分類：規格」逐項回答。\n"
-                "21. 回答使用繁體中文。\n"
-                "22. 只回答問題需要的資訊，不要額外解釋。\n"
-                "23. 回答完立即停止。"
-            )
-        },
-        {
-            "role": "user",
-            "content": (
-                f"【參考規格】\n"
-                f"{context}\n\n"
-                f"【使用者問題】\n"
-                f"{query}"
-            )
-        }
-    ]
+   例如：
+   BZH → RTX 5090
+   BYH → RTX 5080
+   BXH → RTX 5070 Ti
 
-    # =========================================================
-    # 3. LLM Streaming Generation
-    # =========================================================
+3. 如果問題涉及多個項目，必須逐項回答。
+   不可以只選其中一個。
 
-    print("\n[AI 回答]")
-    print("-" * 40)
+4. 如果同一類規格有多個項目，必須全部列出。
+   例如：
+   1 x PCIe Gen4x4 M.2
+   1 x PCIe Gen5 M.2
+   必須回答為共 2 個 M.2 插槽，而不是 1 個。
 
-    start_time = time.time()
-    first_token_time = None
+5. 位置、介面與功能必須保持正確對應。
+   例如：
+   左側 → Thunderbolt 5 → DisplayPort 2.1
+   右側 → Thunderbolt 4 → DisplayPort 1.4
+   不可以交換。
 
+6. 必須保留規格中的精確數值與單位，例如：
+   64GB、DDR5 5600MHz、2 x SO-DIMM、
+   PCIe Gen5、PCIe Gen4x4、240Hz、2560×1600、
+   99Wh、330W。
+
+7. 如果規格片段不足以回答問題，回答：
+   「提供的規格資料不足以回答此問題。」
+
+8. 使用繁體中文，回答簡潔直接，可使用條列式。
+
+回答前請確認：
+- 是否回答所有問題要求？
+- 是否遺漏數量、單位或規格？
+- 是否交換不同項目的對應關係？
+
+只輸出最終答案，不要輸出分析過程。
+"""
+
+        user_prompt = f"""
+以下是 AORUS 筆電規格資料：
+
+{context}
+
+使用者問題：
+{query}
+
+請嚴格根據以上規格片段回答。
+
+回答時：
+1. 完整回答問題中的所有要求。
+2. 保留每個型號、介面、位置、數量與規格值之間的正確對應關係。
+3. 如果有多個項目，請逐項列出。
+4. 不要交換不同項目的規格。
+5. 不要省略問題要求的任何規格。
+6. 只輸出最終答案，不要輸出分析過程。
+"""
+
+    # ============================================================
+    # 3. LLM Generation
+    # ============================================================
+
+    print("\n[Answer]")
+
+    start_time = time.perf_counter()
+
+    first_content_time = None
     generated_text = ""
     output_chunks = 0
 
     stream = llm.create_chat_completion(
-        messages=messages,
+        messages=[
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
+            {
+                "role": "user",
+                "content": user_prompt,
+            },
+        ],
         max_tokens=256,
         temperature=0.1,
-        stream=True
+        stream=True,
     )
 
-    for output in stream:
+    for chunk in stream:
+        choice = chunk.get("choices", [{}])[0]
 
-        # 第一個 streaming chunk 到達時間
-        if first_token_time is None:
-            first_token_time = time.time()
+        content = choice.get("delta", {}).get("content", "")
 
-        delta = output["choices"][0]["delta"]
+        if content:
+            # 第一次收到實際文字內容
+            if first_content_time is None:
+                first_content_time = time.perf_counter()
 
-        if "content" in delta:
-
-            text = delta["content"]
-
-            print(
-                text,
-                end="",
-                flush=True
-            )
-
-            generated_text += text
+            generated_text += content
             output_chunks += 1
 
-    end_time = time.time()
+            print(content, end="", flush=True)
 
-    # =========================================================
+    end_time = time.perf_counter()
+
+    print()
+
+    # ============================================================
     # 4. Performance Metrics
-    # =========================================================
+    # ============================================================
 
-    if first_token_time is not None:
-
-        ttft = (
-            first_token_time - start_time
-        ) * 1000
-
-        generation_time = (
-            end_time - first_token_time
-        )
-
-        stream_chunks_per_sec = (
-            output_chunks / generation_time
-            if generation_time > 0
-            else 0
-        )
-
+    # TTFT
+    if first_content_time is not None:
+        ttft_ms = (first_content_time - start_time) * 1000
     else:
+        ttft_ms = None
 
-        ttft = 0
-        stream_chunks_per_sec = 0
+    # Generation time
+    if first_content_time is not None:
+        generation_time_sec = end_time - first_content_time
+    else:
+        generation_time_sec = 0.0
 
-    # =========================================================
-    # 5. Evaluation Output
-    # =========================================================
-
-    print("\n" + "-" * 40)
-
-    print("📊 【系統效能評測】")
-
-    print(
-        f" - TTFT：{ttft:.2f} ms"
+    # ------------------------------------------------------------
+    # Token count
+    # ------------------------------------------------------------
+    #
+    # llama.cpp streaming chunks != tokens
+    #
+    # 因此不能用 output_chunks 當 TPS。
+    # 這裡把最後生成的文字重新交給 llama.cpp tokenizer，
+    # 得到實際 token 數。
+    #
+    generated_tokens = len(
+        llm.tokenize(
+            generated_text.encode("utf-8"),
+            add_bos=False,
+        )
     )
 
-    print(
-        f" - Stream Chunks/sec："
-        f"{stream_chunks_per_sec:.2f}"
-    )
+    # TPS
+    if generation_time_sec > 0:
+        tps = generated_tokens / generation_time_sec
+    else:
+        tps = 0.0
 
-    print(
-        f" - Retrieved Chunks："
-        f"{len(retrieved_docs)}"
-    )
+    # Stream chunks/sec
+    if generation_time_sec > 0:
+        stream_chunks_per_sec = output_chunks / generation_time_sec
+    else:
+        stream_chunks_per_sec = 0.0
 
-    print("\n📋 【Retrieval / Generation 分離評估】")
+    # ============================================================
+    # 5. Print Metrics
+    # ============================================================
 
-    print(
-        " - Retrieval："
-        "請確認檢索結果是否包含回答問題所需的正確規格。"
-    )
+    print("\n" + "-" * 70)
+    print("[Performance]")
+    print("-" * 70)
 
-    print(
-        " - Generation："
-        "請確認 AI 回答是否忠實保留規格中的型號、"
-        "位置、數量、數值與規格名稱對應關係。"
-    )
+    if ttft_ms is not None:
+        print(f"TTFT:                {ttft_ms:.2f} ms")
+    else:
+        print("TTFT:                N/A")
+
+    print(f"Generated Tokens:    {generated_tokens}")
+    print(f"Generation Time:     {generation_time_sec:.3f} sec")
+    print(f"TPS:                 {tps:.2f} tokens/sec")
+    print(f"Stream Chunks/sec:   {stream_chunks_per_sec:.2f}")
+    print(f"Retrieved Chunks:    {len(retrieved_docs)}")
+
+    # ============================================================
+    # 6. Return Evaluation Result
+    # ============================================================
 
     return {
         "query": query,
         "retrieved_docs": retrieved_docs,
         "answer": generated_text,
-        "ttft_ms": ttft,
+        "ttft_ms": ttft_ms,
+        "generated_tokens": generated_tokens,
+        "generation_time_sec": generation_time_sec,
+        "tps": tps,
         "stream_chunks_per_sec": stream_chunks_per_sec,
     }
 
 
 def main():
 
-    # =========================================================
-    # 1. 初始化 Data Parser
-    # =========================================================
+    # ============================================================
+    # 1. Initialize Data Parser
+    # ============================================================
 
-    print("=" * 60)
+    print("=" * 70)
     print("Initializing Data Parser & Vector Store...")
-    print("=" * 60)
+    print("=" * 70)
 
     parser = AorusDataParser()
 
-    docs = parser.get_chunks()
+    documents = parser.get_chunks()
 
-    print(
-        f"Total specification chunks: "
-        f"{len(docs)}"
-    )
+    print(f"Total specification chunks: {len(documents)}")
 
-    # =========================================================
-    # 2. 初始化 Vector Store
-    # =========================================================
+    # ============================================================
+    # 2. Initialize Vector Store
+    # ============================================================
 
     vector_store = SimpleVectorStore()
 
-    vector_store.add_documents(docs)
+    print("Loading embedding model...")
 
-    print(
-        "Vector Store initialized successfully."
-    )
+    vector_store.add_documents(documents)
 
-    # =========================================================
-    # 3. 載入 GGUF LLM
-    # =========================================================
+    print("Vector store initialized.")
 
-    model_path = os.path.abspath(
-        "models/qwen2.5-3b-instruct-q4_k_m.gguf"
-    )
+    # ============================================================
+    # 3. Load LLM
+    # ============================================================
+
+    model_path = "models/qwen2.5-3b-instruct-q4_k_m.gguf"
 
     if not os.path.exists(model_path):
-
-        print(
-            f"\n錯誤：找不到模型檔案於：\n"
-            f"{model_path}\n"
-            f"請確認模型檔案名稱與路徑。"
+        raise FileNotFoundError(
+            f"Model not found: {model_path}\n"
+            "Please make sure the GGUF model exists in the models directory."
         )
 
-        return
-
-    print("\nLoading LLM...")
-    print(f"Model: {model_path}")
-    print("GPU layers: -1")
-    print("Context size: 2048")
+    print("\n" + "=" * 70)
+    print("Loading Qwen2.5-3B-Instruct...")
+    print("=" * 70)
 
     llm = Llama(
         model_path=model_path,
@@ -287,67 +297,59 @@ def main():
 
     print("LLM loaded successfully.")
 
-    # =========================================================
-    # 4. RAG 測試問題
-    # =========================================================
+    # ============================================================
+    # 4. Evaluation Queries
+    # ============================================================
 
     test_queries = [
+        # Test 1
+        "AORUS MASTER 16 AM6H 的 CPU 是什麼？",
 
-        # CPU
-        "What CPU does the AORUS MASTER 16 AM6H use?",
+        # Test 2
+        "請列出 BZH、BYH、BXH 三個版本分別搭載什麼 GPU？",
 
-        # GPU
-        "What GPUs are available for the AORUS MASTER 16 BZH, BYH, and BXH?",
+        # Test 3
+        "BZH、BYH、BXH 的 GPU 記憶體容量分別是多少？",
 
-        # GPU VRAM
-        "BZH, BYH 和 BXH 的 GPU 記憶體容量分別是多少？",
+        # Test 4
+        "AORUS MASTER 16 的螢幕解析度與更新率是多少？",
 
-        # Display
-        "What is the screen resolution and refresh rate of the AORUS MASTER 16 AM6H?",
+        # Test 5
+        "這台筆電最高支援多少 RAM？規格與插槽數量是多少？",
 
-        # Memory
-        "這台筆電最高支援多少 RAM？記憶體規格與插槽是什麼？",
+        # Test 6
+        "AORUS MASTER 16 有幾個 M.2 SSD 插槽？分別支援什麼 PCIe 規格？",
 
-        # Storage
-        "How many M.2 slots does the AORUS MASTER 16 AM6H have, and what PCIe generations do they support?",
+        # Test 7
+        "Thunderbolt 4 與 Thunderbolt 5 分別位於哪一側？各支援哪些功能？",
 
-        # Thunderbolt
-        "AORUS MASTER 16 AM6H 的 Thunderbolt 4 和 Thunderbolt 5 分別位於哪一側？支援哪些功能？",
+        # Test 8
+        "這台筆電的無線網路、Bluetooth 和有線網路規格是什麼？",
 
-        # Network
-        "這台筆電支援哪些無線與有線網路規格？",
+        # Test 9
+        "這台筆電是否支援 Windows Hello？有沒有 TPM？",
 
-        # Security
-        "Does the AORUS MASTER 16 AM6H support Windows Hello and TPM?",
-
-        # Battery
-        "What is the battery capacity and AC adapter wattage?",
+        # Test 10
+        "這台筆電的電池容量與 AC Adapter 功率是多少？",
     ]
 
-    # =========================================================
-    # 5. 執行測試
-    # =========================================================
+    # ============================================================
+    # 5. Run Evaluation
+    # ============================================================
 
     results = []
 
     print("\n")
-    print("=" * 60)
-    print(
-        f"開始執行 {len(test_queries)} 組 RAG 測試"
-    )
-    print("=" * 60)
+    print("=" * 70)
+    print("Starting RAG Evaluation")
+    print("=" * 70)
 
-    for i, query in enumerate(
-        test_queries,
-        start=1
-    ):
+    for i, query in enumerate(test_queries, start=1):
 
         print("\n")
-        print(
-            f"################ "
-            f"TEST {i}/{len(test_queries)} "
-            f"################"
-        )
+        print("#" * 70)
+        print(f"# Test {i}/{len(test_queries)}")
+        print("#" * 70)
 
         result = evaluate_query(
             llm=llm,
@@ -358,65 +360,105 @@ def main():
 
         results.append(result)
 
-    # =========================================================
-    # 6. 測試結果摘要
-    # =========================================================
+    # ============================================================
+    # 6. Summary
+    # ============================================================
+
+    print("\n\n")
+    print("=" * 70)
+    print("Evaluation Summary")
+    print("=" * 70)
+
+    print(
+        f"{'Test':<6}"
+        f"{'TTFT(ms)':<14}"
+        f"{'Tokens':<10}"
+        f"{'TPS':<12}"
+        f"{'Chunks/s':<14}"
+        f"{'Retrieved':<10}"
+    )
+
+    print("-" * 70)
+
+    for i, result in enumerate(results, start=1):
+
+        ttft = result["ttft_ms"]
+        tokens = result["generated_tokens"]
+        tps = result["tps"]
+        chunks_sec = result["stream_chunks_per_sec"]
+        retrieved = len(result["retrieved_docs"])
+
+        ttft_str = f"{ttft:.2f}" if ttft is not None else "N/A"
+
+        print(
+            f"{i:<6}"
+            f"{ttft_str:<14}"
+            f"{tokens:<10}"
+            f"{tps:<12.2f}"
+            f"{chunks_sec:<14.2f}"
+            f"{retrieved:<10}"
+        )
+
+    print("-" * 70)
+
+    # ============================================================
+    # 7. Average Metrics
+    # ============================================================
+
+    valid_ttft = [
+        r["ttft_ms"]
+        for r in results
+        if r["ttft_ms"] is not None
+    ]
+
+    valid_tps = [
+        r["tps"]
+        for r in results
+        if r["tps"] > 0
+    ]
+
+    valid_chunks_sec = [
+        r["stream_chunks_per_sec"]
+        for r in results
+        if r["stream_chunks_per_sec"] > 0
+    ]
+
+    if valid_ttft:
+        avg_ttft = sum(valid_ttft) / len(valid_ttft)
+    else:
+        avg_ttft = 0.0
+
+    if valid_tps:
+        avg_tps = sum(valid_tps) / len(valid_tps)
+    else:
+        avg_tps = 0.0
+
+    if valid_chunks_sec:
+        avg_chunks_sec = sum(valid_chunks_sec) / len(valid_chunks_sec)
+    else:
+        avg_chunks_sec = 0.0
+
+    print("\nAverage Performance")
+    print("-" * 70)
+
+    print(f"Average TTFT:              {avg_ttft:.2f} ms")
+    print(f"Average TPS:               {avg_tps:.2f} tokens/sec")
+    print(f"Average Stream Chunks/sec: {avg_chunks_sec:.2f}")
+
+    # ============================================================
+    # 8. Final RAG Evaluation
+    # ============================================================
 
     print("\n")
-    print("=" * 60)
-    print("📊 RAG 測試結果摘要")
-    print("=" * 60)
+    print("=" * 70)
+    print("RAG Evaluation Result")
+    print("=" * 70)
 
-    for i, result in enumerate(
-        results,
-        start=1
-    ):
+    print(f"Total Tests: {len(results)}")
 
-        print(
-            f"Test {i:02d} | "
-            f"TTFT: {result['ttft_ms']:.2f} ms | "
-            f"Stream: "
-            f"{result['stream_chunks_per_sec']:.2f} "
-            f"chunks/sec | "
-            f"Retrieved: "
-            f"{len(result['retrieved_docs'])}"
-        )
+    print("\nAll tests completed.")
 
-    # =========================================================
-    # 7. 平均效能
-    # =========================================================
-
-    if results:
-
-        avg_ttft = (
-            sum(
-                r["ttft_ms"]
-                for r in results
-            )
-            / len(results)
-        )
-
-        avg_stream = (
-            sum(
-                r["stream_chunks_per_sec"]
-                for r in results
-            )
-            / len(results)
-        )
-
-        print("\n" + "-" * 60)
-        print("📈 平均效能")
-        print("-" * 60)
-
-        print(
-            f"平均 TTFT："
-            f"{avg_ttft:.2f} ms"
-        )
-
-        print(
-            f"平均 Stream Chunks/sec："
-            f"{avg_stream:.2f}"
-        )
+    print("=" * 70)
 
 
 if __name__ == "__main__":
