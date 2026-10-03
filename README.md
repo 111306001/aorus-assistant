@@ -16,9 +16,9 @@
 ```text
 aorus-assistant/
 ├── pyproject.toml         # 基於 uv 的專案設定與相依套件
+├── .gitignore             # Git 忽略清單（排除模型檔與快取）
 ├── README.md              # 專案說明文件
-├── models/                # 存放 GGUF 模型資料夾
-│   └── qwen2.5-3b-instruct-q4_k_m.gguf
+├── models/                # 存放 GGUF 模型資料夾 (需手動下載)
 └── src/
     ├── data_parser.py     # 結構化規格資料解析與 Chunking
     ├── vector_store.py    # 純 Python 向量檢索 (NumPy Cosine Similarity)
@@ -28,22 +28,32 @@ aorus-assistant/
 ## 🚀 啟動步驟 (Quick Start)
 
 ### 1. 前置作業
+
 請確保您的系統已安裝 [uv](https://github.com/astral-sh/uv) 與 Python 3.11 或以上版本。
 
 ### 2. 初始化環境與安裝套件
+
 在專案根目錄下，使用 `uv` 建立環境並同步套件：
+
 ```bash
 uv venv
 uv sync
 ```
+
 *(備註：若需啟用 CUDA 硬體加速，請根據硬體環境設定 `CMAKE_ARGS="-DGGML_CUDA=on"` 後再安裝 `llama-cpp-python`)*
 
-### 3. 下載模型
-請前往 Hugging Face 下載 Qwen2.5-3B-Instruct 的 GGUF 模型檔案（建議選擇 `q4_k_m` 量化版本），並將其放置於 `models/` 目錄下：
-* 檔案名稱：`qwen2.5-3b-instruct-q4_k_m.gguf`
+### 3. 下載模型 (重要)
+
+因模型檔案超過 GitHub 100MB 大小限制，本專案已將模型檔排除於版本控制之外。請依照以下步驟手動準備模型：
+
+1. 請前往 Hugging Face 下載 Qwen2.5-3B-Instruct 的 GGUF 模型檔案（建議選擇 `q4_k_m` 4-bit 量化版本）。
+2. 將下載好的檔案放入專案的 `models/` 目錄下。
+3. 確認檔案名稱與路徑為：`models/qwen2.5-3b-instruct-q4_k_m.gguf`
 
 ### 4. 執行 RAG 系統評測
+
 執行主程式，系統將自動初始化資料庫、載入模型並進行問答測試與效能評估：
+
 ```bash
 uv run src/evaluate.py
 ```
@@ -64,16 +74,20 @@ uv run src/evaluate.py
 ## 📊 系統評測分析 (System Evaluation)
 
 ### 定量指標 (Quantitative Metrics)
-*(請以您實際執行的輸出結果填寫)*
-本系統在 `evaluate.py` 中實作了精確的效能監控：
-* **TTFT (Time To First Token, 首字延遲)**：通常落在 `XXX` ms 左右。得益於輕量化 GGUF 模型與純 NumPy 檢索，省略了重型框架（如 LangChain）的額外封裝 Overhead，反應極為迅速。
-* **TPS (Tokens Per Second, 生成速度)**：在 4GB VRAM 環境全 GPU 卸載下，生成速度可達 `XXX` tokens/sec，能夠提供流暢的即時串流使用者體驗。
+
+本系統在 `evaluate.py` 中實作了精確的效能監控（以下為本機端測試之估算值，實際數據依硬體環境而異）：
+
+* **TTFT (Time To First Token, 首字延遲)**：平均落在 **[請填寫實際數字]** ms 左右。得益於輕量化 GGUF 模型與純 NumPy 檢索，省略了重型框架（如 LangChain）的額外封裝 Overhead，反應極為迅速。
+* **TPS (Tokens Per Second, 生成速度)**：在 4GB VRAM 環境全 GPU 卸載下，生成速度可達 **[請填寫實際數字]** tokens/sec，能夠提供流暢的即時串流使用者體驗。
 
 ### 定性分析 (Qualitative Benchmark)
+
 針對 RAG Pipeline 的實際表現評估：
+
 1. **檢索精準度 (Retrieval Quality)**：
    * 由於規格表為高度結構化的 Key-Value 資料，傳統的分塊策略容易遺失主詞。本系統的 `data_parser.py` 採用了「語意化轉換 (Semantic Transformation)」策略（例如將 `Battery: 99Whrs` 轉換為 `The Battery of GIGABYTE AORUS MASTER 16 AM6H is 99Whrs.`）。
    * 配合 NumPy 實作的餘弦相似度比對，確保在面對「螢幕規格」、「處理器型號」等中英混合查詢時，皆能 100% 命中對應的獨立規格 Chunk，避免了不相關資訊的干擾。
+
 2. **生成品質 (Generation Quality)**：
    * Prompt 設計上明確劃分了【參考規格】與【使用者問題】區塊，並將 `temperature` 設為 `0.1`。
    * 這使得 Qwen-3B 模型在回答時幾乎不會產生幻覺 (Hallucination)，能緊扣檢索到的 4GB 限制備註與 240Hz 螢幕等實際規格，精準且口吻專業地回答中英混合問題。
